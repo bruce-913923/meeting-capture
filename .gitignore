@@ -1,0 +1,5 @@
+.build/
+build/
+.DS_Store
+# 本機路徑與個人設定
+config.local.json

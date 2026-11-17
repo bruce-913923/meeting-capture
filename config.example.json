@@ -1,0 +1,6 @@
+{
+  "_說明": "複製成 config.local.json 再填（config.local.json 不進 git）。make-app.sh 會把它打包進 app，只在設定欄位還是空白時當預設值；~ 會展開成家目錄。",
+  "modelPath": "~/path/to/breeze-asr-25-mlx",
+  "pythonPath": "~/path/to/venv/bin/python",
+  "glossary": "# 人名（固定放最前面）\n"
+}
