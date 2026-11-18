@@ -3,6 +3,7 @@ import Foundation
 /// 開發與驗證用的命令列模式（不開介面）：
 ///   MeetingCapture --cli test-transcribe
 ///   MeetingCapture --cli transcribe <會議資料夾>
+///   MeetingCapture --cli live <會議資料夾>   （模擬錄音中：轉草稿與最後一段以外的段落，印出即時逐字稿）
 ///   MeetingCapture --cli skills
 ///   MeetingCapture --cli plan <會議資料夾> [skill 路徑或 builtin] [claude|codex]
 ///   MeetingCapture --cli execute <會議資料夾> <skill> <provider> <答案 JSON>
@@ -38,6 +39,14 @@ enum CLI {
             case "transcribe":
                 try await Transcriber.transcribe(dir: URL(fileURLWithPath: args[0]), settings: settings)
                 print("OK")
+            case "live":
+                let dir = URL(fileURLWithPath: args[0])
+                for (sub, _) in Transcriber.sources {
+                    let segs = Transcriber.segments(dir.appendingPathComponent(sub)).dropLast()
+                    let drafts = Transcriber.segments(dir.appendingPathComponent("live").appendingPathComponent(sub))
+                    for f in Array(segs) + drafts { _ = await Transcriber.runLive(file: f, dir: dir, settings: settings) }
+                    if let n = Transcriber.liveNames[sub] { print("== \(n)"); print((try? String(contentsOf: dir.appendingPathComponent(n), encoding: .utf8)) ?? "") }
+                }
             case "skills":
                 for s in SkillScanner.scan(provider: settings.provider, extraDirs: settings.extraSkillDirs) {
                     print(SkillScanner.isMeetingRelated(s) ? "*" : " ", s.source, s.name, "—", s.id)

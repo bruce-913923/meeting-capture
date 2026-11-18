@@ -27,9 +27,20 @@ final class AppState: ObservableObject {
 
     private var session: CaptureSession?
     private var ticker: Timer?
-    /// 轉文字在背景排隊，不佔 phase：轉上一場時照樣可以開始擷取下一場
-    @Published var transcribeQueue: [URL] = []
-    @Published var transcribingDir: URL?
+    /// 轉文字在背景排隊，不佔 phase：轉上一場時照樣可以開始擷取下一場。
+    /// 一次只跑一個，避免搶 GPU；會議中的草稿最優先，其次是錄好的段落，最後才是整場收尾
+    enum TJob: Equatable {
+        case draft(dir: URL, file: URL)
+        case segment(dir: URL, file: URL)
+        case full(dir: URL, fresh: Bool)
+        var dir: URL { switch self { case .draft(let d, _), .segment(let d, _), .full(let d, _): return d } }
+        var rank: Int { switch self { case .draft: return 0; case .segment: return 1; case .full: return 2 } }
+        var isFull: Bool { if case .full = self { return true }; return false }
+    }
+    @Published var jobs: [TJob] = []
+    @Published var runningJob: TJob?
+    /// 已拆成逐段的整場工作：第二次輪到時就直接收尾，避免某段一直轉失敗時無限重排
+    private var expanded: Set<URL> = []
     /// 錄音中轉好的場次：等這場結束再跳整理視窗，不在會議中打斷
     private var waitingFinish: [URL] = []
     private var finishWindows: [URL: NSWindow] = [:]
@@ -66,8 +77,12 @@ final class AppState: ObservableObject {
 
     /// 選單上的背景轉文字狀態
     var queueLine: String? {
-        guard let d = transcribingDir else { return nil }
-        let more = transcribeQueue.isEmpty ? "" : "（後面還有 \(transcribeQueue.count) 場）"
+        // 只列要收尾的場次；錄音中的邊錄邊轉不顯示
+        let dirs = ([runningJob].compactMap { $0 } + jobs).filter { $0.dir != session?.dir }.map(\.dir)
+        var seen: [URL] = []
+        for d in dirs where !seen.contains(d) { seen.append(d) }
+        guard let d = seen.first else { return nil }
+        let more = seen.count > 1 ? "（後面還有 \(seen.count - 1) 場）" : ""
         return "背景轉文字：\(Self.displayName(d).prefix(28))\(more)"
     }
 
@@ -123,6 +138,9 @@ final class AppState: ObservableObject {
         do {
             let s = try CaptureSession(target: t, settings: settings)
             s.onError = { [weak self] msg in Task { @MainActor in self?.warning = msg } }
+            let dir = s.dir
+            s.onSegmentClosed = { [weak self] url in Task { @MainActor in self?.enqueue(.segment(dir: dir, file: url)) } }
+            s.onDraftClosed = { [weak self] url in Task { @MainActor in self?.enqueue(.draft(dir: dir, file: url)) } }
             try await s.start()
             session = s; startedAt = Date(); slideCount = 0; hearingAudio = false; warning = nil; micOn = false
             phase = .recording
@@ -174,35 +192,65 @@ final class AppState: ObservableObject {
         waitingFinish = []
     }
 
-    /// 排進背景轉文字佇列；一次只轉一場，避免兩個轉文字搶 GPU
-    func transcribe(dir: URL) {
-        guard transcribingDir != dir, !transcribeQueue.contains(dir) else { return }
-        transcribeQueue.append(dir)
-        if transcribingDir == nil { Task { await runQueue() } }
+    /// 整場轉文字（結束擷取、匯入、重新轉文字）。fresh＝清掉之前逐段轉好的結果重轉
+    func transcribe(dir: URL, fresh: Bool = false) {
+        guard !jobs.contains(where: { $0.isFull && $0.dir == dir }) else { return }
+        enqueue(.full(dir: dir, fresh: fresh))
     }
 
-    func isQueued(_ dir: URL) -> Bool { transcribingDir == dir || transcribeQueue.contains(dir) }
+    func isQueued(_ dir: URL) -> Bool {
+        (runningJob.map { $0.isFull && $0.dir == dir } ?? false) || jobs.contains { $0.isFull && $0.dir == dir }
+    }
+
+    private func enqueue(_ job: TJob) {
+        guard runningJob != job, !jobs.contains(job) else { return }
+        jobs.append(job)
+        if runningJob == nil { Task { await runQueue() } }
+    }
 
     private func runQueue() async {
-        while !transcribeQueue.isEmpty {
-            let dir = transcribeQueue.removeFirst()
-            transcribingDir = dir
-            var failure: String?
-            do { try await Transcriber.transcribe(dir: dir, settings: settings) }
-            catch { failure = error.localizedDescription }
-            transcribingDir = nil
-            let name = Self.displayName(dir)
-            if let failure {
-                warning = "轉文字失敗（\(name)）：\(failure)"
-                notify("轉文字失敗：\(name)", failure)
+        while let i = jobs.indices.min(by: { jobs[$0].rank < jobs[$1].rank || (jobs[$0].rank == jobs[$1].rank && $0 < $1) }) {
+            let job = jobs.remove(at: i)
+            runningJob = job
+            let s = settings
+            switch job {
+            case .draft(let dir, let file), .segment(let dir, let file):
+                let ok = await Transcriber.runLive(file: file, dir: dir, settings: s)
+                if !ok, case .segment = job { warning = "會議中轉文字失敗一段，結束後會再轉一次" }
+                runningJob = nil
+            case .full(let dir, let fresh):
+                // 逐檔轉的引擎：拆成一段一段排隊，中間可以插入會議中的草稿
+                let todo = expanded.contains(dir) ? [] : await Transcriber.pending(dir: dir, settings: s, fresh: fresh)
+                if !todo.isEmpty {
+                    expanded.insert(dir)
+                    jobs.append(contentsOf: todo.map { TJob.segment(dir: dir, file: $0) })
+                    jobs.append(.full(dir: dir, fresh: false))
+                    runningJob = nil
+                    continue
+                }
+                expanded.remove(dir)
+                var failure: String?
+                do { try await Transcriber.transcribe(dir: dir, settings: s) }
+                catch { failure = error.localizedDescription }
+                if failure == nil { Transcriber.clearLive(dir: dir) }
+                runningJob = nil
+                finished(dir: dir, failure: failure)
             }
-            if phase == .recording {
-                waitingFinish.append(dir)
-                if failure == nil { notify("「\(name)」文字已轉好", "這場結束後再跳出整理視窗；也可以從「整理會議」選單先打開") }
-            } else {
-                if failure == nil { notify("「\(name)」文字已轉好", "接著選擇整理方式") }
-                openFinish(dir: dir)   // 失敗也開：仍可只用字幕與截圖整理
-            }
+        }
+    }
+
+    private func finished(dir: URL, failure: String?) {
+        let name = Self.displayName(dir)
+        if let failure {
+            warning = "轉文字失敗（\(name)）：\(failure)"
+            notify("轉文字失敗：\(name)", failure)
+        }
+        if phase == .recording {
+            waitingFinish.append(dir)
+            if failure == nil { notify("「\(name)」文字已轉好", "這場結束後再跳出整理視窗；也可以從「整理會議」選單先打開") }
+        } else {
+            if failure == nil { notify("「\(name)」文字已轉好", "接著選擇整理方式") }
+            openFinish(dir: dir)   // 失敗也開：仍可只用字幕與截圖整理
         }
     }
 

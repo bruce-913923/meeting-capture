@@ -20,10 +20,15 @@ final class CaptureSession {
     /// 線上會議中途打開的現場麥克風：獨立一路錄音，隨時可開關，檔案存 mic/（檔名是開始時刻，所以中間斷掉時間軸也不會錯）
     private var mic: AudioRecorder?
     private let segmentSeconds: Double
+    /// 錄音中邊錄邊轉：正式段落與草稿小檔寫完時通知（AppState 排進轉文字）
+    private let live: Bool
+    var onSegmentClosed: ((URL) -> Void)? { didSet { wire(audio); if let mic { wire(mic) } } }
+    var onDraftClosed: ((URL) -> Void)? { didSet { wire(audio); if let mic { wire(mic) } } }
 
     /// target 為 nil：實體會議，只錄麥克風、不截圖
     init(target: CaptureTarget?, settings: Settings, title: String = "") throws {
         segmentSeconds = settings.segmentSeconds
+        live = settings.liveTranscribe && settings.engine.perFile
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd-HHmm"
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? (target?.title ?? "實體會議") : title
         let safeTitle = Self.sanitize(name)
@@ -39,7 +44,14 @@ final class CaptureSession {
             audio = AudioRecorder(dir: dir.appendingPathComponent("mic"), segmentSeconds: settings.segmentSeconds, systemAudio: false)
             frames = nil
         }
+        if !live { audio.draftSeconds = 0 }
         writeMeta()
+    }
+
+    private func wire(_ r: AudioRecorder) {
+        guard live else { return }
+        r.onSegmentClosed = onSegmentClosed
+        r.onDraftClosed = onDraftClosed
     }
 
     var onError: ((String) -> Void)? {
@@ -55,6 +67,8 @@ final class CaptureSession {
             guard mic == nil, frames != nil else { return }
             let m = AudioRecorder(dir: dir.appendingPathComponent("mic"), segmentSeconds: segmentSeconds, systemAudio: false)
             m.onError = onError
+            if !live { m.draftSeconds = 0 }
+            wire(m)
             try await m.start()
             mic = m
             if !meta.micRecorded { update { $0.micRecorded = true } }

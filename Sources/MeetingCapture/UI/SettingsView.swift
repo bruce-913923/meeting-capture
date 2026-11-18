@@ -25,6 +25,10 @@ struct SettingsView: View {
                     Text("{audio} 會換成 16kHz wav 音檔，{out} 是輸出文字檔路徑（工具會自己加 .txt 也可以）。").font(.caption).foregroundStyle(.secondary)
                 }
                 TextField("語言代碼", text: $state.settings.language)
+                if state.settings.engine.perFile {
+                    Toggle("錄音中就開始轉文字", isOn: $state.settings.liveTranscribe)
+                    Text("每段錄音完成就先轉，另外每 2 分鐘轉一份即時草稿（會議助手用）。結束後只剩最後一段要轉。關掉的話，結束後才整場一起轉。").font(.caption).foregroundStyle(.secondary)
+                }
                 HStack {
                     Button(testing ? "測試中…" : "用一段中文測試音檔試跑") {
                         testing = true; testResult = ""

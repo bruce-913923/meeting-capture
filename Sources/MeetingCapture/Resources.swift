@@ -22,8 +22,10 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--engine", required=True)
 ap.add_argument("--model", required=True)
 ap.add_argument("--language", default="zh")
-ap.add_argument("--audio-dir", required=True)
-ap.add_argument("--out", required=True)
+ap.add_argument("--audio-dir")
+ap.add_argument("--out")
+# 逐檔模式：每個音檔轉完寫在旁邊的同名 .txt（錄音中每段完成就先轉，結束後不用重轉）
+ap.add_argument("--files", nargs="*")
 ap.add_argument("--hint", default="")   # 常用詞彙，用「、」分隔
 a = ap.parse_args()
 HINT = a.hint.strip()
@@ -41,9 +43,12 @@ if a.engine == "mlx" and HINT:
         return _DO(**kw)
     _t.DecodingOptions = _with_hint
 
-files = sorted(f for f in os.listdir(a.audio_dir) if f.endswith(".m4a"))
-if not files:
-    sys.exit("no audio files")
+if not a.files:
+    if not a.audio_dir or not a.out:
+        sys.exit("need --files or --audio-dir/--out")
+    files = sorted(f for f in os.listdir(a.audio_dir) if f.endswith(".m4a"))
+    if not files:
+        sys.exit("no audio files")
 
 def base_clock(name):
     try:
@@ -72,20 +77,31 @@ def segments(path):
     else:
         sys.exit("unknown engine " + a.engine)
 
-with open(a.out, "w", encoding="utf-8") as out:
+def lines(path):
+    t0 = base_clock(os.path.basename(path))
     last = None
-    for f in files:
-        t0 = base_clock(f)
-        for start, text in segments(os.path.join(a.audio_dir, f)):
-            text = text.strip()
-            if not text or text == last:   # 模型在靜音時常重複同一句
-                continue
-            if HINT and len(text) > 4 and text.strip("、，。 ") in HINT:   # 靜音時把提示詞念出來
-                continue
-            last = text
-            ts = (t0 + datetime.timedelta(seconds=start)).strftime("%H:%M:%S")
-            out.write(f"[{ts}] {text}\n")
-        out.flush()
-        print("done", f, flush=True)
+    for start, text in segments(path):
+        text = text.strip()
+        if not text or text == last:   # 模型在靜音時常重複同一句
+            continue
+        if HINT and len(text) > 4 and text.strip("、，。 ") in HINT:   # 靜音時把提示詞念出來
+            continue
+        last = text
+        ts = (t0 + datetime.timedelta(seconds=start)).strftime("%H:%M:%S")
+        yield f"[{ts}] {text}\n"
+
+if a.files:
+    for path in a.files:
+        out = os.path.splitext(path)[0] + ".txt"
+        with open(out + ".tmp", "w", encoding="utf-8") as fh:
+            fh.writelines(lines(path))
+        os.replace(out + ".tmp", out)   # 寫完才換名，沒轉完的不會被當成已轉好
+        print("done", path, flush=True)
+else:
+    with open(a.out, "w", encoding="utf-8") as out:
+        for f in files:
+            out.writelines(lines(os.path.join(a.audio_dir, f)))
+            out.flush()
+            print("done", f, flush=True)
 """#
 }

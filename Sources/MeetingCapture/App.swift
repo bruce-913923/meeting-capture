@@ -87,7 +87,7 @@ struct MenuContent: View {
                 Button("開啟其他會議資料夾…") { state.chooseMeeting() }
             }
             if let dir = state.lastDir {
-                Button(state.isQueued(dir) ? "轉文字中：\(dir.lastPathComponent.prefix(30))" : "重新轉文字：\(dir.lastPathComponent.prefix(30))") { state.transcribe(dir: dir) }
+                Button(state.isQueued(dir) ? "轉文字中：\(dir.lastPathComponent.prefix(30))" : "重新轉文字：\(dir.lastPathComponent.prefix(30))") { state.transcribe(dir: dir, fresh: true) }
                     .disabled(state.isQueued(dir))
                 Button("打開會議資料夾：\(dir.lastPathComponent.prefix(30))") { state.openFolder(dir) }
             }

@@ -3,15 +3,112 @@ import Speech
 
 /// 轉文字：依設定的引擎把 audio/*.m4a 轉成 transcript.txt（每行「[時:分:秒] 文字」）。
 enum Transcriber {
-    static func transcribe(dir: URL, settings: Settings) async throws {
-        // audio/＝電腦播出的聲音（遠端與會者）；mic/＝勾選「在會議室現場」時的麥克風（現場的人）
-        for (sub, outName) in [("audio", "transcript.txt"), ("mic", "transcript-mic.txt")] {
+    /// 兩路聲音：audio/＝電腦播出的聲音（遠端與會者）；mic/＝現場麥克風
+    static let sources = [("audio", "transcript.txt"), ("mic", "transcript-mic.txt")]
+
+    /// 整場轉文字。MLX／faster-whisper 逐檔轉、每檔結果存在旁邊的 .txt：錄音中已轉好的段落不重轉。
+    /// fresh＝重新轉文字（換引擎或改常用詞彙後），先清掉逐檔結果
+    static func transcribe(dir: URL, settings: Settings, fresh: Bool = false) async throws {
+        for (sub, outName) in sources {
             let audioDir = dir.appendingPathComponent(sub)
             guard FileManager.default.fileExists(atPath: audioDir.path) else { continue }
             let out = dir.appendingPathComponent(outName)
-            try await transcribeFolder(audioDir: audioDir, out: out, settings: settings)
+            if settings.engine.perFile {
+                if fresh { clearCaches(audioDir) }
+                let todo = uncached(audioDir)
+                if !todo.isEmpty { try transcribeFiles(todo, settings: settings) }
+                try assemble(audioDir: audioDir, out: out)
+            } else {
+                try await transcribeFolder(audioDir: audioDir, out: out, settings: settings)
+            }
             GlossaryStats.record(Glossary(settings.glossary).fix(file: out), dir: dir)
         }
+    }
+
+    // MARK: 逐檔
+
+    static func segments(_ audioDir: URL) -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: audioDir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "m4a" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+    static func cache(_ file: URL) -> URL { file.deletingPathExtension().appendingPathExtension("txt") }
+    static func uncached(_ audioDir: URL) -> [URL] {
+        segments(audioDir).filter { !FileManager.default.fileExists(atPath: cache($0).path) }
+    }
+    static func clearCaches(_ audioDir: URL) {
+        for f in segments(audioDir) { try? FileManager.default.removeItem(at: cache(f)) }
+    }
+
+    /// 一次轉多個檔（只載入一次模型），每檔寫出旁邊的 .txt
+    static func transcribeFiles(_ files: [URL], settings: Settings) throws {
+        let r = runPython(settings: settings, args: ["--files"] + files.map(\.path))
+        guard r.code == 0 else { throw TranscribeError.failed(r.err.suffix(800).description) }
+    }
+
+    /// 把逐檔結果依時間接成一份逐字稿
+    static func assemble(audioDir: URL, out: URL) throws {
+        let text = segments(audioDir).compactMap { try? String(contentsOf: cache($0), encoding: .utf8) }.joined()
+        try text.write(to: out, atomically: true, encoding: .utf8)
+    }
+
+    /// 會議中轉一個檔（正式段落或草稿），轉完更新即時逐字稿。失敗回傳 false（結束後整場收尾會再轉）
+    static func runLive(file: URL, dir: URL, settings: Settings) async -> Bool {
+        guard settings.engine.perFile else { return false }
+        let ok = FileManager.default.fileExists(atPath: cache(file).path)
+            || (try? transcribeFiles([file], settings: settings)) != nil
+        assembleLive(dir: dir, settings: settings)
+        return ok
+    }
+
+    /// 整場收尾前還沒轉的檔（逐檔引擎才有）；fresh 時先清掉舊結果
+    static func pending(dir: URL, settings: Settings, fresh: Bool) async -> [URL] {
+        guard settings.engine.perFile else { return [] }
+        return sources.flatMap { (sub, _) -> [URL] in
+            let audioDir = dir.appendingPathComponent(sub)
+            guard FileManager.default.fileExists(atPath: audioDir.path) else { return [] }
+            if fresh { clearCaches(audioDir) }
+            return uncached(audioDir)
+        }
+    }
+
+    // MARK: 會議中的即時逐字稿
+
+    static let liveNames = ["audio": "live-transcript.txt", "mic": "live-transcript-mic.txt"]
+
+    /// 即時逐字稿＝已轉好的正式段落＋之後的草稿。
+    /// 相鄰草稿重疊幾秒：前一份只取「下一份開始之前」開頭的句子、下一份取它自己開始之後的。
+    /// 模型給的句子時間只標開頭（常是 0 秒），用中點切會整句丟掉；這樣切頂多重複半句，不會漏
+    static func assembleLive(dir: URL, settings: Settings) {
+        for (sub, _) in sources {
+            let audioDir = dir.appendingPathComponent(sub)
+            guard FileManager.default.fileExists(atPath: audioDir.path), let name = liveNames[sub] else { continue }
+            let segs = segments(audioDir)
+            var text = ""
+            var cutoff = Int.max
+            for f in segs {
+                if let t = try? String(contentsOf: cache(f), encoding: .utf8) { text += t }
+                else { cutoff = Clock.from(fileName: f.lastPathComponent); break }
+            }
+            let drafts = segments(dir.appendingPathComponent("live").appendingPathComponent(sub))
+                .filter { FileManager.default.fileExists(atPath: cache($0).path) }
+            for (i, d) in drafts.enumerated() {
+                let lo = i == 0 ? 0 : Clock.from(fileName: d.lastPathComponent)
+                let hi = i + 1 < drafts.count ? Clock.from(fileName: drafts[i + 1].lastPathComponent) : Int.max
+                for line in ((try? String(contentsOf: cache(d), encoding: .utf8)) ?? "").split(separator: "\n") {
+                    guard let t = Clock.parse(line), t >= cutoff, t >= lo, t < hi else { continue }
+                    text += line + "\n"
+                }
+            }
+            let out = dir.appendingPathComponent(name)
+            try? text.write(to: out, atomically: true, encoding: .utf8)
+            Glossary(settings.glossary).fix(file: out)
+        }
+    }
+
+    /// 會議結束、正式逐字稿好了以後，草稿與即時逐字稿就用不到了
+    static func clearLive(dir: URL) {
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("live"))
+        for n in liveNames.values { try? FileManager.default.removeItem(at: dir.appendingPathComponent(n)) }
     }
 
     static func transcribeFolder(audioDir: URL, out: URL, settings: Settings) async throws {
@@ -80,7 +177,7 @@ enum Transcriber {
         }
     }
 
-    private static func runPython(settings: Settings, args: [String]) -> (code: Int32, out: String, err: String) {
+    static func runPython(settings: Settings, args: [String]) -> (code: Int32, out: String, err: String) {
         let script = Resources.write(name: "transcribe.py", content: Resources.transcribePy)
         let py = settings.pythonPath.isEmpty ? "/usr/bin/python3" : settings.pythonPath
         let modelDir = URL(fileURLWithPath: settings.modelPath).deletingLastPathComponent()
@@ -148,6 +245,11 @@ enum Clock {
         let s = fileName.prefix(6)
         guard s.count == 6, let h = Int(s.prefix(2)), let m = Int(s.dropFirst(2).prefix(2)), let sec = Int(s.suffix(2)) else { return 0 }
         return h * 3600 + m * 60 + sec
+    }
+    /// 逐字稿一行「[HH:MM:SS] 文字」→ 當天秒數
+    static func parse<S: StringProtocol>(_ line: S) -> Int? {
+        guard line.hasPrefix("["), line.count >= 10 else { return nil }
+        return from(fileName: line.dropFirst().prefix(8).replacingOccurrences(of: ":", with: ""))
     }
     static func add(_ base: Int, _ offset: TimeInterval) -> String {
         let t = base + Int(offset)

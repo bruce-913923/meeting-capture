@@ -13,6 +13,8 @@ enum EngineType: String, Codable, CaseIterable, Identifiable {
     }
     var needsModel: Bool { self == .mlx || self == .fasterWhisper }
     var needsPython: Bool { self == .mlx || self == .fasterWhisper }
+    /// 可以逐檔轉、錄音中邊錄邊轉
+    var perFile: Bool { self == .mlx || self == .fasterWhisper }
 }
 
 enum Provider: String, Codable, CaseIterable, Identifiable {
@@ -51,6 +53,8 @@ struct Settings: Codable, Equatable {
     var outputKind: String = "summary"
     /// 常用詞彙（見 Glossary）
     var glossary: String = ""
+    /// 錄音中就開始轉文字（每段完成就轉，另有每 2 分鐘的即時草稿）；只有 MLX／faster-whisper 支援
+    var liveTranscribe: Bool = true
 
     /// 舊版設定檔少了新欄位時用預設值補上
     init(from decoder: Decoder) throws {
@@ -67,6 +71,7 @@ struct Settings: Codable, Equatable {
         claudeExtraTools = v(.claudeExtraTools, claudeExtraTools)
         allowedMCP = v(.allowedMCP, allowedMCP); outputKind = v(.outputKind, outputKind)
         glossary = v(.glossary, glossary)
+        liveTranscribe = v(.liveTranscribe, liveTranscribe)
     }
 
     static var fileURL: URL {
