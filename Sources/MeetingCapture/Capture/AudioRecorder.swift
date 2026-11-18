@@ -15,14 +15,11 @@ final class AudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private(set) var peak: Float = 0          // 最近一段的最大音量，給介面判斷是否錄到聲音
     var onError: ((String) -> Void)?
 
-    private let includeMic: Bool
-    private var micRecorder: AudioRecorder?   // 麥克風另存一組檔案（mic/），避免兩路聲音時間軸互相干擾
-
     private let systemAudio: Bool
 
     /// systemAudio=false：實體會議，只錄麥克風（自己就是麥克風錄音器）
-    init(dir: URL, segmentSeconds: Double = 600, includeMic: Bool = false, systemAudio: Bool = true) {
-        self.dir = dir; self.segmentSeconds = segmentSeconds; self.includeMic = includeMic; self.systemAudio = systemAudio
+    init(dir: URL, segmentSeconds: Double = 600, systemAudio: Bool = true) {
+        self.dir = dir; self.segmentSeconds = segmentSeconds; self.systemAudio = systemAudio
     }
 
     func start() async throws {
@@ -37,9 +34,6 @@ final class AudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         cfg.channelCount = 1
         cfg.width = 2; cfg.height = 2
         cfg.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-        if includeMic {
-            if #available(macOS 15.0, *) { cfg.captureMicrophone = true }
-        }
         if !systemAudio {
             guard #available(macOS 15.0, *) else { throw CaptureError.micNeedsMacOS15 }
             cfg.captureMicrophone = true
@@ -51,12 +45,6 @@ final class AudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         let s = SCStream(filter: filter, configuration: cfg, delegate: self)
         try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
-        if includeMic, #available(macOS 15.0, *) {
-            let mic = AudioRecorder(dir: dir.deletingLastPathComponent().appendingPathComponent("mic"), segmentSeconds: segmentSeconds)
-            try FileManager.default.createDirectory(at: mic.dir, withIntermediateDirectories: true)
-            try s.addStreamOutput(mic, type: .microphone, sampleHandlerQueue: mic.queue)
-            micRecorder = mic
-        }
         try await s.startCapture()
         stream = s
     }
@@ -64,9 +52,6 @@ final class AudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     func stop() async {
         try? await stream?.stopCapture()
         stream = nil
-        if let mic = micRecorder {
-            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in mic.queue.async { mic.finishSegment { c.resume() } } }
-        }
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             queue.async { self.finishSegment { c.resume() } }
         }

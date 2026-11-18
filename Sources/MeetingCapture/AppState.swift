@@ -17,7 +17,9 @@ final class AppState: ObservableObject {
     @Published var hearingAudio = false
     @Published var lastDir: URL?
     @Published var warning: String?
-    @Published var inRoom = false   // 我在會議室現場：同時錄麥克風
+    /// 線上會議錄音中，現場麥克風是否開著（錄音中隨時可切換）
+    @Published var micOn = false
+    @Published var micBusy = false
     @Published var isPhysical = false
     /// 螢幕錄音權限：沒有時找不到任何視窗，要明講，不能顯示成「沒看到會議視窗」
     @Published var hasScreenPermission = CGPreflightScreenCaptureAccess()
@@ -49,7 +51,7 @@ final class AppState: ObservableObject {
         switch phase {
         case .idle:
             if !hasScreenPermission { return "⚠️ 沒有螢幕錄音權限，截不到會議畫面" }
-            return windows.isEmpty ? "待命：沒看到會議視窗（可從「選擇要截的視窗」挑）" : "待命"
+            return windows.isEmpty && browserWindows.isEmpty ? "待命：沒看到會議視窗（可從「開始擷取 › 其他視窗」挑）" : "待命"
         case .recording:
             let secs = Int(Date().timeIntervalSince(startedAt ?? Date()))
             if isPhysical {
@@ -119,10 +121,10 @@ final class AppState: ObservableObject {
             SystemAudio.unmuteQuietly()
         }
         do {
-            let s = try CaptureSession(target: t, settings: settings, includeMic: physical ? false : inRoom)
+            let s = try CaptureSession(target: t, settings: settings)
             s.onError = { [weak self] msg in Task { @MainActor in self?.warning = msg } }
             try await s.start()
-            session = s; startedAt = Date(); slideCount = 0; hearingAudio = false; warning = nil
+            session = s; startedAt = Date(); slideCount = 0; hearingAudio = false; warning = nil; micOn = false
             phase = .recording
             isPhysical = physical
             var ticks = 0, warnedMute = false, warnedSilent = false
@@ -151,11 +153,19 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 線上會議錄音中打開／關掉現場麥克風
+    func setMic(_ on: Bool) async {
+        guard let s = session, !isPhysical, !micBusy else { return }
+        micBusy = true; defer { micBusy = false }
+        do { try await s.setMic(on); micOn = s.micOn }
+        catch { micOn = s.micOn; warning = "麥克風打不開：\(error.localizedDescription)" }
+    }
+
     func stop() async {
         guard let s = session else { return }
         ticker?.invalidate(); ticker = nil
         await s.stop()
-        session = nil
+        session = nil; micOn = false
         lastDir = s.dir
         phase = .idle
         transcribe(dir: s.dir)

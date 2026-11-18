@@ -31,25 +31,32 @@ struct MenuContent: View {
             Divider()
         }
         if state.phase != .recording {
-            Text("提醒：線上會議錄的是電腦播出的聲音，喇叭不能靜音（音量開最小即可），麥克風不用開")
+            Text("提醒：線上會議錄的是電腦播出的聲音，喇叭不能靜音（音量開最小即可）")
         }
         Divider()
         switch state.phase {
         case .recording:
+            if state.micOn { Text("🎙 正在錄現場聲音") }
             Button("結束擷取") { Task { await state.stop() } }
+            if !state.isPhysical {
+                if #available(macOS 15.0, *) {
+                    Toggle("錄現場麥克風（現場有人講話、會後討論時打開）", isOn: Binding(
+                        get: { state.micOn },
+                        set: { on in Task { await state.setMic(on) } }))
+                    .disabled(state.micBusy)
+                } else {
+                    Text("錄現場麥克風需要 macOS 15 以上")
+                }
+            }
         case .importing:
             Text("匯入完成後會排進背景轉文字，轉好跳出整理視窗")
         default:
-            Button("開始擷取（\(state.windows.first?.title.prefix(24).description ?? "會議")）") {
-                Task { await state.start() }
-            }
-            .disabled(state.windows.isEmpty)
-            Toggle("我在會議室現場（同時錄麥克風）", isOn: $state.inRoom)
-            Button("只錄麥克風（實體會議，沒開會議軟體）") { Task { await state.start(physical: true) } }
-            Button("匯入錄影或錄音檔…") { state.importVideo() }
-            Menu("選擇要截的視窗") {
-                ForEach(state.windows) { w in
-                    Button(w.label) { Task { await state.start(target: w) } }
+            Menu("開始擷取") {
+                if !state.windows.isEmpty {
+                    Text("會議軟體")
+                    ForEach(state.windows) { w in
+                        Button(w.label) { Task { await state.start(target: w) } }
+                    }
                 }
                 if !state.browserWindows.isEmpty {
                     Divider()
@@ -57,16 +64,18 @@ struct MenuContent: View {
                     ForEach(state.browserWindows) { w in
                         Button(w.label) { Task { await state.start(target: w) } }
                     }
-                    Divider()
                 }
+                Divider()
                 Menu("其他視窗") {
                     ForEach(state.otherWindows) { w in
                         Button(w.label) { Task { await state.start(target: w) } }
                     }
                 }
-                Divider()
                 Button("重新找視窗") { Task { await state.refreshWindows() } }
             }
+            Text("現場有人講話時，開始後再打開「錄現場麥克風」")
+            Button("只錄麥克風（實體會議，沒開會議軟體）") { Task { await state.start(physical: true) } }
+            Button("匯入錄影或錄音檔…") { state.importVideo() }
         }
         Divider()
         if state.phase != .recording {
