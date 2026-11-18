@@ -93,6 +93,21 @@ struct MenuContent: View {
                 Divider()
                 Button("開啟其他會議資料夾…") { state.chooseMeeting() }
             }
+            // 會後跟 AI 討論：開過討論的會議可以接著上次的聊，也可以開新的
+            Menu("在 \(state.providerName) 討論會議") {
+                ForEach(AppState.meetings(root: state.settings.outputRoot)) { m in
+                    if Discussion.hasPrevious(m.dir) {
+                        Menu("💬 " + m.plainLabel) {
+                            Button("繼續上次的討論") { state.discuss(dir: m.dir, resume: true) }
+                            Button("開新的討論") { state.discuss(dir: m.dir, resume: false) }
+                        }
+                    } else {
+                        Button("　 " + m.plainLabel) { state.discuss(dir: m.dir, resume: false) }
+                    }
+                }
+                Divider()
+                Text("💬＝討論過，可以接著上次的聊")
+            }
             if let dir = state.lastDir {
                 Button(state.isQueued(dir) ? "轉文字中：\(dir.lastPathComponent.prefix(30))" : "重新轉文字：\(dir.lastPathComponent.prefix(30))") { state.transcribe(dir: dir, fresh: true) }
                     .disabled(state.isQueued(dir))

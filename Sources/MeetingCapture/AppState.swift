@@ -409,4 +409,9 @@ struct MeetingEntry: Identifiable {
         let f = DateFormatter(); f.dateFormat = "M/d HH:mm"
         return "\(organized ? "✓ " : "　 ")\(f.string(from: started))　\(title.prefix(28))"
     }
+    /// 不帶「整理過」記號的版本（討論選單用）
+    var plainLabel: String {
+        let f = DateFormatter(); f.dateFormat = "M/d HH:mm"
+        return "\(f.string(from: started))　\(title.prefix(28))"
+    }
 }
