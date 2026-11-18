@@ -77,6 +77,12 @@ struct SettingsView: View {
                 }
             }
 
+            Section("會議助手") {
+                TextField("用的模型", text: $state.settings.assistantModel, prompt: Text("空白＝跟整理用同一個"))
+                Text("會議中整理重點、回答問題只需要讀文字，用便宜的模型就夠（Claude 預設 haiku；Codex 留空用預設）。").font(.caption).foregroundStyle(.secondary)
+                TextField("你的名字", text: $state.settings.myName, prompt: Text("例如：小明"))
+                Text("「有人提到我嗎」用；沒填就不顯示這個按鈕。").font(.caption).foregroundStyle(.secondary)
+            }
             Section("擷取") {
                 pathRow("會議資料存放位置", $state.settings.outputRoot, directory: true)
                 Stepper("每 \(Int(state.settings.captureInterval)) 秒截一次", value: $state.settings.captureInterval, in: 2...30)

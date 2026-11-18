@@ -55,6 +55,10 @@ struct Settings: Codable, Equatable {
     var glossary: String = ""
     /// 錄音中就開始轉文字（每段完成就轉，另有每 2 分鐘的即時草稿）；只有 MLX／faster-whisper 支援
     var liveTranscribe: Bool = true
+    /// 會議助手用的模型（空白＝跟整理用同一個）；整理重點不需要大模型
+    var assistantModel: String = "haiku"
+    /// 你的名字：會議助手「有人提到我嗎」用
+    var myName: String = ""
 
     /// 舊版設定檔少了新欄位時用預設值補上
     init(from decoder: Decoder) throws {
@@ -72,6 +76,7 @@ struct Settings: Codable, Equatable {
         allowedMCP = v(.allowedMCP, allowedMCP); outputKind = v(.outputKind, outputKind)
         glossary = v(.glossary, glossary)
         liveTranscribe = v(.liveTranscribe, liveTranscribe)
+        assistantModel = v(.assistantModel, assistantModel); myName = v(.myName, myName)
     }
 
     static var fileURL: URL {

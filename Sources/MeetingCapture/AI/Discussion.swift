@@ -62,6 +62,7 @@ enum Discussion {
         if has("captions.txt") { files.append("- captions.txt：會議軟體畫面上的字幕辨識，可和逐字稿對照") }
         if has("slides") { files.append("- slides/：換頁時截下的簡報圖（slides/index.json 有每頁的時間）") }
         if has("frames") { files.append("- frames/：換頁時整個會議視窗的原圖") }
+        if has("assistant.md") { files.append("- assistant.md：會議中「會議助手」整理的重點（目前結論與各時段重點）") }
         if has("notes.md") { files.append("- notes.md：使用者寫的會議說明（背景、與會者、專有名詞），理解內容以它為準") }
         for n in ["summary.md", "minutes.md", "article.md", "output.md"] where has(n) {
             files.append("- \(n)：之前整理好的結果")

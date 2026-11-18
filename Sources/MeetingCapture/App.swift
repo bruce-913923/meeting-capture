@@ -39,6 +39,7 @@ struct MenuContent: View {
             if state.micOn { Text("🎙 正在錄現場聲音") }
             Button("結束擷取") { Task { await state.stop() } }
             if let dir = state.recordingDir {
+                Button("打開會議助手（重點整理＋問問題）") { state.openAssistant() }
                 Button("在 \(state.providerName) 討論這場會議") { state.discuss(dir: dir, resume: false) }
                 if Discussion.hasPrevious(dir) {
                     Button("繼續上次的討論（\(state.providerName)）") { state.discuss(dir: dir, resume: true) }

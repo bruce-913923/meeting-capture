@@ -45,6 +45,9 @@ final class AppState: ObservableObject {
     private var waitingFinish: [URL] = []
     private var finishWindows: [URL: NSWindow] = [:]
     private var settingsWindow: NSWindow?
+    /// 會議助手（錄音中才開）
+    private(set) var assistant: Assistant?
+    private var assistantPanel: NSPanel?
 
     init() {
         lastDir = Self.latestMeetingDir(root: settings.outputRoot)
@@ -182,6 +185,37 @@ final class AppState: ObservableObject {
         catch { warning = "開不了討論：\(error.localizedDescription)" }
     }
 
+    /// 打開會議助手浮動面板：一直浮在其他視窗上面（包括全螢幕的會議），可拖動、縮放
+    func openAssistant() {
+        guard let dir = session?.dir else { return }
+        if let p = assistantPanel, assistant?.dir == dir { p.orderFrontRegardless(); p.makeKey(); return }
+        closeAssistant()
+        let a = Assistant(dir: dir, settings: { [weak self] in self?.settings ?? Settings() },
+                          live: { [weak self] in self?.session?.dir == dir })
+        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 560),
+                        styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
+        p.title = "會議助手：\(Self.displayName(dir).prefix(20))"
+        p.isFloatingPanel = true
+        p.level = .floating
+        p.hidesOnDeactivate = false
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.isReleasedWhenClosed = false
+        p.contentView = NSHostingView(rootView: AssistantView(a: a).environmentObject(self))
+        if let screen = NSScreen.main?.visibleFrame {
+            p.setFrameOrigin(NSPoint(x: screen.maxX - 360, y: screen.maxY - 580))
+        }
+        p.orderFrontRegardless()
+        p.makeKey()
+        NSApp.activate(ignoringOtherApps: true)
+        assistant = a; assistantPanel = p
+        a.start()
+    }
+
+    func closeAssistant() {
+        assistant?.stop(); assistant = nil
+        assistantPanel?.close(); assistantPanel = nil
+    }
+
     /// 線上會議錄音中打開／關掉現場麥克風
     func setMic(_ on: Bool) async {
         guard let s = session, !isPhysical, !micBusy else { return }
@@ -195,6 +229,7 @@ final class AppState: ObservableObject {
         ticker?.invalidate(); ticker = nil
         await s.stop()
         session = nil; micOn = false
+        closeAssistant()
         lastDir = s.dir
         phase = .idle
         transcribe(dir: s.dir)

@@ -14,12 +14,13 @@ enum CLI {
         guard let i = a.firstIndex(of: "--cli"), i + 1 < a.count else { return }
         let cmd = a[i + 1]
         let rest = Array(a.dropFirst(i + 2))
-        let sem = DispatchSemaphore(value: 0)
+        // 不能用 semaphore 卡住主執行緒：會議助手等 @MainActor 的東西要在主執行緒上跑
+        var done = false
         Task {
             await run(cmd, rest)
-            sem.signal()
+            done = true
         }
-        sem.wait()
+        while !done { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
         exit(0)
     }
 
@@ -52,6 +53,11 @@ enum CLI {
                 if args.count > 1 { settings.claudePath = args[1]; settings.codexPath = args[1] }
                 let url = try Discussion.makeScript(dir: URL(fileURLWithPath: args[0]), settings: settings, live: false, resume: false)
                 print(url.path)
+            case "assistant":
+                // 會議助手：整理到目前為止的重點；有第二個參數就再問一題
+                let dir = URL(fileURLWithPath: args[0])
+                let out = await Assistant.runOnce(dir: dir, settings: settings, question: args.count > 1 ? args[1] : nil)
+                print(out)
             case "skills":
                 for s in SkillScanner.scan(provider: settings.provider, extraDirs: settings.extraSkillDirs) {
                     print(SkillScanner.isMeetingRelated(s) ? "*" : " ", s.source, s.name, "—", s.id)
