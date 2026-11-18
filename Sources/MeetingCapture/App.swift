@@ -40,9 +40,8 @@ struct MenuContent: View {
             Button("結束擷取") { Task { await state.stop() } }
             if let dir = state.recordingDir {
                 Button("打開會議助手（重點整理＋問問題）") { state.openAssistant() }
-                Button("在 \(state.providerName) 討論這場會議") { state.discuss(dir: dir, resume: false) }
-                if Discussion.hasPrevious(dir) {
-                    Button("繼續上次的討論（\(state.providerName)）") { state.discuss(dir: dir, resume: true) }
+                Button(Discussion.hasPrevious(dir) ? "在 \(state.providerName) 繼續討論這場會議" : "在 \(state.providerName) 討論這場會議") {
+                    state.discuss(dir: dir, resume: Discussion.hasPrevious(dir))
                 }
             }
             if !state.isPhysical {
@@ -86,32 +85,22 @@ struct MenuContent: View {
         }
         Divider()
         if state.phase != .recording {
+            // 每場會議一個子選單，所有動作都從這裡進去
             Menu("整理會議（✓＝整理過）") {
                 ForEach(AppState.meetings(root: state.settings.outputRoot)) { m in
-                    Button(m.label) { state.lastDir = m.dir; state.openFinish(dir: m.dir) }
-                }
-                Divider()
-                Button("開啟其他會議資料夾…") { state.chooseMeeting() }
-            }
-            // 會後跟 AI 討論：開過討論的會議可以接著上次的聊，也可以開新的
-            Menu("在 \(state.providerName) 討論會議") {
-                ForEach(AppState.meetings(root: state.settings.outputRoot)) { m in
-                    if Discussion.hasPrevious(m.dir) {
-                        Menu("💬 " + m.plainLabel) {
-                            Button("繼續上次的討論") { state.discuss(dir: m.dir, resume: true) }
-                            Button("開新的討論") { state.discuss(dir: m.dir, resume: false) }
+                    Menu(m.label) {
+                        Button("整理…") { state.lastDir = m.dir; state.openFinish(dir: m.dir) }
+                        // 討論過就接著上次的聊（要重來在對話裡打 /clear）
+                        Button(Discussion.hasPrevious(m.dir) ? "在 \(state.providerName) 繼續討論" : "在 \(state.providerName) 討論") {
+                            state.discuss(dir: m.dir, resume: Discussion.hasPrevious(m.dir))
                         }
-                    } else {
-                        Button("　 " + m.plainLabel) { state.discuss(dir: m.dir, resume: false) }
+                        Button(state.isQueued(m.dir) ? "轉文字中…" : "重新轉文字") { state.transcribe(dir: m.dir, fresh: true) }
+                            .disabled(state.isQueued(m.dir))
+                        Button("打開資料夾") { state.openFolder(m.dir) }
                     }
                 }
                 Divider()
-                Text("💬＝討論過，可以接著上次的聊")
-            }
-            if let dir = state.lastDir {
-                Button(state.isQueued(dir) ? "轉文字中：\(dir.lastPathComponent.prefix(30))" : "重新轉文字：\(dir.lastPathComponent.prefix(30))") { state.transcribe(dir: dir, fresh: true) }
-                    .disabled(state.isQueued(dir))
-                Button("打開會議資料夾：\(dir.lastPathComponent.prefix(30))") { state.openFolder(dir) }
+                Button("開啟其他會議資料夾…") { state.chooseMeeting() }
             }
         }
         Button("設定…") { state.openSettings() }

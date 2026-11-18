@@ -56,9 +56,8 @@ struct FinishView: View {
                 Button("打開資料夾") { state.openFolder(dir) }.buttonStyle(.link)
             }.font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 12) {
-                Button("在 \(state.providerName) 討論這場會議") { state.discuss(dir: dir, resume: false) }
-                if Discussion.hasPrevious(dir) {
-                    Button("繼續上次的討論") { state.discuss(dir: dir, resume: true) }
+                Button(Discussion.hasPrevious(dir) ? "在 \(state.providerName) 繼續討論這場會議" : "在 \(state.providerName) 討論這場會議") {
+                    state.discuss(dir: dir, resume: Discussion.hasPrevious(dir))
                 }
             }.font(.caption)
         }
