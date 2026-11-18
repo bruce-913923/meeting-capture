@@ -38,6 +38,12 @@ struct MenuContent: View {
         case .recording:
             if state.micOn { Text("🎙 正在錄現場聲音") }
             Button("結束擷取") { Task { await state.stop() } }
+            if let dir = state.recordingDir {
+                Button("在 \(state.providerName) 討論這場會議") { state.discuss(dir: dir, resume: false) }
+                if Discussion.hasPrevious(dir) {
+                    Button("繼續上次的討論（\(state.providerName)）") { state.discuss(dir: dir, resume: true) }
+                }
+            }
             if !state.isPhysical {
                 if #available(macOS 15.0, *) {
                     Toggle("錄現場麥克風（現場有人講話、會後討論時打開）", isOn: Binding(

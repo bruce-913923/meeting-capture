@@ -55,6 +55,12 @@ struct FinishView: View {
                 Text("簡報 \(countFiles("slides", ext: "jpg")) 張")
                 Button("打開資料夾") { state.openFolder(dir) }.buttonStyle(.link)
             }.font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Button("在 \(state.providerName) 討論這場會議") { state.discuss(dir: dir, resume: false) }
+                if Discussion.hasPrevious(dir) {
+                    Button("繼續上次的討論") { state.discuss(dir: dir, resume: true) }
+                }
+            }.font(.caption)
         }
     }
 

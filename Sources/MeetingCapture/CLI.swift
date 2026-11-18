@@ -47,6 +47,11 @@ enum CLI {
                     for f in Array(segs) + drafts { _ = await Transcriber.runLive(file: f, dir: dir, settings: settings) }
                     if let n = Transcriber.liveNames[sub] { print("== \(n)"); print((try? String(contentsOf: dir.appendingPathComponent(n), encoding: .utf8)) ?? "") }
                 }
+            case "discuss-script":
+                // 印出討論用的腳本路徑（不開終端機）；args[1] 可指定替代執行檔，方便測試
+                if args.count > 1 { settings.claudePath = args[1]; settings.codexPath = args[1] }
+                let url = try Discussion.makeScript(dir: URL(fileURLWithPath: args[0]), settings: settings, live: false, resume: false)
+                print(url.path)
             case "skills":
                 for s in SkillScanner.scan(provider: settings.provider, extraDirs: settings.extraSkillDirs) {
                     print(SkillScanner.isMeetingRelated(s) ? "*" : " ", s.source, s.name, "—", s.id)

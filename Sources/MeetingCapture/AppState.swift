@@ -86,7 +86,7 @@ final class AppState: ObservableObject {
         return "背景轉文字：\(Self.displayName(d).prefix(28))\(more)"
     }
 
-    static func displayName(_ dir: URL) -> String {
+    nonisolated static func displayName(_ dir: URL) -> String {
         let t = MeetingFiles.title(dir); return t.isEmpty ? dir.lastPathComponent : t
     }
 
@@ -169,6 +169,17 @@ final class AppState: ObservableObject {
         } catch {
             phase = .error("無法開始擷取：\(error.localizedDescription)（第一次使用請到 系統設定 › 隱私權與安全性 › 螢幕與系統錄音 允許本 app）")
         }
+    }
+
+    /// 正在錄的那場會議資料夾
+    var recordingDir: URL? { session?.dir }
+
+    var providerName: String { settings.provider == .claude ? "Claude Code" : "Codex" }
+
+    /// 開終端機跟 Claude Code／Codex 討論這場會議（會議中或會議後都可以）
+    func discuss(dir: URL, resume: Bool) {
+        do { try Discussion.open(dir: dir, settings: settings, live: dir == session?.dir, resume: resume) }
+        catch { warning = "開不了討論：\(error.localizedDescription)" }
     }
 
     /// 線上會議錄音中打開／關掉現場麥克風
