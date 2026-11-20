@@ -1,6 +1,7 @@
 import Foundation
 
 /// 常用詞彙（人名、專案名、專有名詞）。設定裡一行一個；常被聽錯的寫成「錯字1、錯字2 > 正確」（由左到右）。
+/// 錯字可以含空白（「human inner loop」是一個錯字，不會拆成三個）。
 /// 用在三個地方：轉文字時當提示詞、轉完把錯字換掉、AI 整理時當專有名詞依據。
 /// `#` 開頭是分類標題；標題含「人名」或「固定」的那一區，提示時固定排最前面。
 struct Glossary {
@@ -26,15 +27,20 @@ struct Glossary {
 
     static func isPinnedHeading(_ line: String) -> Bool { line.contains("人名") || line.contains("固定") }
 
-    /// 一行拆成（錯字們, 正確）。箭頭可寫 >、->、=>、→；沒有箭頭＝只列常用詞
+    /// 一行拆成（錯字們, 正確）。箭頭可寫 >、->、=>、→；反方向「正確 <- 錯字」也接受；沒有箭頭＝只列常用詞。
+    /// 錯字之間用頓號、逗號或分號分開；空白不算分隔（以前算，「麥肯 c」被拆出一個「c」，把逐字稿裡英文的 c 全換掉）
     static func parse(_ line: String) -> ([String], String) {
         var norm = line
+        for back in ["<-", "←"] {
+            let p = norm.components(separatedBy: back)
+            if p.count == 2 { norm = p[1] + ">" + p[0] }
+        }
         for arrow in ["->", "=>", "→", ">"] { norm = norm.replacingOccurrences(of: arrow, with: "\u{1}") }
         let parts = norm.components(separatedBy: "\u{1}")
         let right = parts[parts.count - 1].trimmingCharacters(in: .whitespaces)
         var wrongs: [String] = []
-        for w in parts.dropLast().joined(separator: "、").split(whereSeparator: { "、,，;； ".contains($0) }) {
-            let w = String(w).trimmingCharacters(in: .whitespaces)
+        for w in parts.dropLast().joined(separator: "、").split(whereSeparator: { "、,，;；".contains($0) }) {
+            let w = w.split(whereSeparator: \.isWhitespace).joined(separator: " ")
             // 只有符號的不算錯字，免得把逐字稿裡的「-」都換掉
             guard w.contains(where: { $0.isLetter || $0.isNumber }), w != right, !wrongs.contains(w) else { continue }
             wrongs.append(w)
@@ -81,14 +87,57 @@ struct Glossary {
     /// 回傳每個正確詞被換了幾處
     @discardableResult
     func fix(file: URL) -> [String: Int] {
-        guard !fixes.isEmpty, var text = try? String(contentsOf: file, encoding: .utf8) else { return [:] }
-        var counts: [String: Int] = [:]
-        for f in fixes {
-            let c = text.components(separatedBy: f.wrong).count - 1
-            if c > 0 { text = text.replacingOccurrences(of: f.wrong, with: f.right); counts[f.right, default: 0] += c }
-        }
-        if !counts.isEmpty { try? text.write(to: file, atomically: true, encoding: .utf8) }
+        guard !fixes.isEmpty, let text = try? String(contentsOf: file, encoding: .utf8) else { return [:] }
+        let (out, counts) = apply(text)
+        if !counts.isEmpty { try? out.write(to: file, atomically: true, encoding: .utf8) }
         return counts
+    }
+
+    /// 錯字怎麼比：中間的空白有幾個都算（「麥肯 c」也比得到「麥肯c」）；英文不分大小寫；
+    /// 開頭或結尾是英數字時只比完整的詞，「c」不會比到 sync、cover 裡面
+    static func pattern(_ wrong: String) -> NSRegularExpression? {
+        let words = wrong.split(whereSeparator: \.isWhitespace).map { NSRegularExpression.escapedPattern(for: String($0)) }
+        guard !words.isEmpty else { return nil }
+        let isWordChar: (Character) -> Bool = { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        var p = words.joined(separator: "\\s*")
+        if let c = wrong.first, isWordChar(c) { p = "(?<![A-Za-z0-9])" + p }
+        if let c = wrong.last, isWordChar(c) { p += "(?![A-Za-z0-9])" }
+        return try? NSRegularExpression(pattern: p, options: .caseInsensitive)
+    }
+
+    /// 把錯字換成正確詞，回傳（新文字, 每個正確詞換了幾處）。
+    /// 先在原文找完所有位置再一起換：長的錯字先佔位置，換上去的字不會再被別條換到；
+    /// 原本就是正確寫法的地方不動（「麥肯」不會把「麥肯錫」換成「麥肯錫錫」）
+    func apply(_ text: String) -> (String, [String: Int]) {
+        let ns = text as NSString
+        var taken: [NSRange] = []
+        for right in Set(fixes.map { $0.right }) where !right.isEmpty {
+            var from = 0
+            while from < ns.length {
+                let r = ns.range(of: right, options: [], range: NSRange(location: from, length: ns.length - from))
+                if r.location == NSNotFound { break }
+                taken.append(r)
+                from = r.location + r.length
+            }
+        }
+        var hits: [(range: NSRange, right: String)] = []
+        for f in fixes {
+            guard let re = Self.pattern(f.wrong) else { continue }
+            for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) where m.range.length > 0 {
+                let r = m.range
+                if ns.substring(with: r) == f.right || taken.contains(where: { NSIntersectionRange($0, r).length > 0 }) { continue }
+                taken.append(r)
+                hits.append((r, f.right))
+            }
+        }
+        guard !hits.isEmpty else { return (text, [:]) }
+        let out = NSMutableString(string: text)
+        var counts: [String: Int] = [:]
+        for h in hits.sorted(by: { $0.range.location > $1.range.location }) {
+            out.replaceCharacters(in: h.range, with: h.right)
+            counts[h.right, default: 0] += 1
+        }
+        return (out as String, counts)
     }
 
     // MARK: 把 AI 回報的修正加進詞彙表文字
